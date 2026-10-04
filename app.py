@@ -2,12 +2,12 @@ import streamlit as st
 import json
 import base64
 import os
+from datetime import datetime, timedelta
 from openai import OpenAI
 
 # 1. 页面基本配置与全局防截断样式
 st.set_page_config(page_title="校园信息智能抽取引擎", page_icon="🏫", layout="wide")
 
-# 注入轻量 CSS
 st.markdown("""
 <style>
 div[data-testid="stMarkdownContainer"] p {
@@ -23,188 +23,271 @@ div.stButton > button {
 </style>
 """, unsafe_allow_html=True)
 
+# ===== 核心功能函数：纯手工构建 ICS 日历文件 =====
+def generate_ics_content(itinerary, theme):
+    """根据 AI 生成的行程，自动打包成手机可识别的 .ics 文件内容"""
+    ics_lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Hainan University//Campus AI Engine//CN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH"
+    ]
+    
+    # 遍历每一项待办，生成一个全天日程（默认安排在明天，并在描述中写明建议时间）
+    for idx, step in enumerate(itinerary):
+        task_name = step.get('task', '准备事项')
+        time_point = step.get('time_point', '待定')
+        
+        # 设定日程为明天，避免时区解析报错，确保全端兼容
+        target_date = (datetime.now() + timedelta(days=1)).strftime("%Y%m%d")
+        
+        ics_lines.extend([
+            "BEGIN:VEVENT",
+            f"SUMMARY:【待办】{task_name}",
+            f"DESCRIPTION:关联通知：{theme}\\n建议完成节点：{time_point}\\n(由基米队智能引擎自动生成)",
+            f"DTSTART;VALUE=DATE:{target_date}",
+            "END:VEVENT"
+        ])
+        
+    ics_lines.append("END:VCALENDAR")
+    return "\n".join(ics_lines)
+# =================================================
 
-# 2. 侧边栏：项目背景与系统配置
+# # 2. 侧边栏：项目背景与系统配置
+# 将你的专属 Logo 固定在网页左上角的专业导航栏位置
+st.logo("mylogo.jpg")
+
 with st.sidebar:
-    # 顶部图片与赛道标识
-    st.image("mylogo.jpg")
+    # 侧边栏的宣传大图也替换为你的自定义图片
+    st.image("mylogo.jpg", use_container_width=True)
     st.markdown("<h4 style='text-align: center; color: #8A8178; margin-top: -10px;'>AI+场景创新赛道</h4>", unsafe_allow_html=True)
     
-    # 赛道与项目背景解释（使用折叠面板收纳长文本）
     with st.expander("💡 赛道契合度与场景痛点", expanded=False):
         st.caption(
             "**痛点**：校园群聊通知冗长、多时间节点易遗漏。\n\n"
-            "**创新**：本项目紧扣“场景创新”，利用大模型强大的语义理解与指令遵循能力，"
-            "将非结构化文本降噪重组，并提供行程闭环服务，真正实现 AI 落地校园微场景。"
+            "**创新**：本项目紧扣“场景创新”，提供从多模态降噪到行程闭环（原生日历导出）的 AI 落地服务。"
         )
 
     st.markdown("---")
-    
-    # 算法系统配置区
     st.header("⚙️ 算法系统配置")
-    st.caption("在此配置大模型底座参数。系统采用动态提示词工程（Prompt Engineering），保障信息抽取的精确度与召回率。")
-    
-    st.write("📌 **项目名称**：非结构化校园通知智能抽取与多节点解构系统")
+    st.write("📌 **项目名称**：非结构化校园通知智能抽取引擎")
     st.write("👥 **参赛团队**：基米队")
     
-    st.markdown("---")
+    st.markdown("#### 🔑 引擎密钥配置")
     
-    # API 密钥输入与帮助文档
-    api_key = st.text_input("🔑 唤醒大模型 API Key", type="password", placeholder="sk-...")
-    with st.expander("❓ 如何获取与配置密钥？"):
-        st.caption(
-            "1. 本系统支持 DeepSeek 或 硅基流动 等主流 OpenAI 格式接口。\n"
-            "2. 前往对应开放平台注册并获取密钥（sk-...）。\n"
-            "3. 粘贴至上方输入框即可动态激活云端大模型算力。"
-        )
-
-
+    # 将混元替换为 Qwen-VL
+    engine_choice = st.radio(
+        "请选择要使用的解析引擎：",
+        ("DeepSeek (纯文本极速版)", "Qwen-VL (图文多模态旗舰版)"),
+        index=0
+    )
+    
+    deepseek_key = ""
+    vision_key = ""
+    
+    if engine_choice == "DeepSeek (纯文本极速版)":
+        st.info("💡 **提示**：DeepSeek 仅支持识别纯文本。适合处理复制粘贴的文字通知。")
+        deepseek_key = st.text_input("填入 DeepSeek API Key", type="password", placeholder="sk-...")
+    else:
+        st.info("🖼️ **提示**：如需上传【通知截图】识图，请选择此引擎。")
+        vision_key = st.text_input("填入硅基流动 API Key", type="password", placeholder="sk-...")
 # 3. 主页面标题与视觉排版 (背景大图 + 悬浮半透明文字框)
-# 读取你的本地图片，转换为网页背景图格式
 image_path = "school.jpg"
 if os.path.exists(image_path):
     with open(image_path, "rb") as f:
         encoded_string = base64.b64encode(f.read()).decode()
     bg_image_url = f"data:image/jpeg;base64,{encoded_string}"
 else:
-    # 备用网络图（防报错）
-    bg_image_url = "https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?auto=format&fit=crop&w=1200&q=80"
+    bg_image_url = "mylogo.jpg"
+
+# 读取你的专属动态图标
+icon_path = "schoollogo.jpg"  # 👈 把这里改成你自己的图标文件名！
+if os.path.exists(icon_path):
+    with open(icon_path, "rb") as f:
+        icon_encoded = base64.b64encode(f.read()).decode()
+    # 如果你的图片是 jpg，把下面的 image/png 改成 image/jpeg
+    icon_url = f"data:image/jpeg;base64,{icon_encoded}"
+else:
+    # 如果找不到你的本地图片，就用这个默认的网络图片顶替防报错
+    icon_url = "https://cdn-icons-png.flaticon.com/512/8297/8297073.png"
 
 st.markdown(f"""
-<div style="
-    background-image: url('{bg_image_url}');
-    background-size: cover;
-    background-position: center;
-    border-radius: 16px;
-    padding: 60px 20px; 
-    margin-bottom: 24px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-">
-    <!-- 悬浮在图片上方的半透明白色文字卡片 -->
-    <div style="
-        background-color: rgba(255, 255, 255, 0.88); 
-        backdrop-filter: blur(6px);
-        padding: 30px 40px; 
-        border-radius: 12px;
-        text-align: center;
-        max-width: 85%;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-    ">
-        <h1 style="margin-top: 0; margin-bottom: 12px; color: #3D342B; font-size: 32px; font-weight: bold;">
-            🏫 校园非结构化通知 · 智能抽取引擎
-        </h1>
-        <p style="margin: 0; color: #8A8178; font-size: 16px; line-height: 1.6;">
-            针对多截止日期、复杂考核门槛的通知，实现实体级细粒度抽取，并自动生成【专属行程规划】。
-        </p >
-    </div>
+<style>
+/* 定义一个名为 subtle-pulse 的平滑呼吸动画 */
+@keyframes subtle-pulse {{
+    0% {{ transform: scale(1); opacity: 0.9; }}
+    50% {{ transform: scale(1.08); opacity: 1; }}
+    100% {{ transform: scale(1); opacity: 0.9; }}
+}}
+</style>
+<div style="background-image: url('{bg_image_url}'); background-size: cover; background-position: center; border-radius: 16px; padding: 60px 20px; margin-bottom: 24px; display: flex; justify-content: center; align-items: center; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+<div style="background-color: rgba(255, 255, 255, 0.88); backdrop-filter: blur(6px); padding: 30px 40px; border-radius: 12px; text-align: center; max-width: 85%; box-shadow: 0 8px 24px rgba(0,0,0,0.15);">
+<div style="display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 12px;">
+<!-- 这里自动调用了你刚才转换的本地图片 -->
+<img src="{icon_url}" style="width: 42px; height: 42px; animation: subtle-pulse 2.5s infinite ease-in-out;">
+<h1 style="margin: 0; color: #3D342B; font-size: 32px; font-weight: bold;">
+校园非结构化通知 · 智能抽取引擎
+</h1>
+</div>
+<p style="margin: 0; color: #8A8178; font-size: 16px; line-height: 1.6;">
+支持截图识图上传，实现多时间节点细粒度抽取，并自动生成【专属原生行程规划】。
+</p>
+</div>
 </div>
 """, unsafe_allow_html=True)
-
-st.markdown("---")
-
 # 4. 左右分栏交互
 left_col, right_col = st.columns([1, 1], gap="large")
 
 with left_col:
-    st.subheader("📥 原始复杂通知输入")
-    sample_text = (
-        ""
-    )
-    user_input = st.text_area("请粘贴含多个时间或长文本要求的通知内容：", value=sample_text, height=240)
+    st.subheader("📥 复杂通知输入端")
     
-    start_btn = st.button("🚀 开始细粒度抽取与行程规划", type="primary", use_container_width=True)
+    # 【杀手锏 1】：多模态视觉上传组件
+    uploaded_image = st.file_uploader("📷 上传通知截图 (选填，自动 OCR)", type=["png", "jpg", "jpeg"])
+    if uploaded_image:
+        st.success("✅ 图片已就绪，将在抽取时同步进行视觉解构。")
+        
+    sample_text = (
+        "示例：关于开展2026年度大学生创新创业训练计划（大创）项目申报的通知：\n"
+        "1. 申报时间：系统线上填报截止时间为10月15日23:59；纸质版申报书一式三份，需指导教师签字后，于10月17日17:00前交至学院教务科（教学楼A栋302）。逾期不予受理。\n"
+        "2. 申报门槛：项目负责人需为全日制在校大二或大三本科生，且已修必修课程无不及格记录。每个团队总人数不得超过5人。\n"
+        "3. 答辩安排：学院初审通过的项目，将于10月22日下午14:00进行立项答辩，请提前准备5分钟的演示PPT。"
+    )
+    user_input = st.text_area("或直接粘贴纯文本通知内容：", value=sample_text, height=200)
+    start_btn = st.button("🚀 启动细粒度抽取与规划", type="primary", use_container_width=True)
 
 with right_col:
-    st.subheader("📤 智能输出面板")
+    st.subheader("📤 智能输出与闭环面板")
     
-    # 1. 只有当点击按钮时，才去呼叫大模型，并把结果“记”在脑子里
     if start_btn:
-        if not api_key:
-            st.error("⚠️ 请先在左侧边栏填入 API Key！")
-        elif not user_input.strip():
-            st.warning("⚠️ 输入内容不能为空！")
+        # --- 防呆拦截 ---
+        if engine_choice == "DeepSeek (纯文本极速版)":
+            if not deepseek_key:
+                st.error("⚠️ 请在左侧填入 DeepSeek API Key！")
+                st.stop()
+            if uploaded_image:
+                st.warning("⚠️ 发现截图！DeepSeek只能处理纯文字，请在左侧切换为【Qwen-VL】引擎。")
+                st.stop()
+            if not user_input.strip():
+                st.warning("⚠️ 请输入纯文本内容！")
+                st.stop()
         else:
-            with st.spinner("🤖 正在进行多节点解构并生成行程规划..."):
-                try:
-                    client = OpenAI(
-                        api_key=api_key,
-                        base_url="https://api.deepseek.com"  
-                    )
-                    
-                    system_prompt = (
-                        "你是一个专业的结构化实体抽取引擎和时间管理专家。从用户的复杂通知中精准解构信息，"
-                        "并且根据截止时间和各项要求，倒推生成一个合理的准备行程/待办计划。"
-                        "必须且仅输出标准 JSON 格式，严格符合以下字段定义：\n"
-                        "{\n"
-                        '  "theme": "通知/活动核心主题",\n'
-                        '  "time_nodes": [{"event": "具体针对的事件/项目", "deadline": "对应截止时间或发生时间"}],\n'
-                        '  "location": "办理/提交地点或线上方式",\n'
-                        '  "requirements": ["具体要求条款1", "具体要求条款2"],\n'
-                        '  "additional_notes": "其他补充提示",\n'
-                        '  "suggested_itinerary": [{"time_point": "建议时间", "task": "待办任务描述"}]\n'
-                        "}\n"
-                    )
-                    
-                    response = client.chat.completions.create(
-                        model="deepseek-chat",  
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_input}
-                        ],
-                        response_format={'type': 'json_object'}
-                    )
-                    
-                    # 💥 【核心秘密武器】：把结果存进系统的“记忆体”中！
-                    st.session_state.ai_result = json.loads(response.choices[0].message.content)
-                    
-                    st.toast('✅ 数据提取与行程规划完成！', icon='⚡')
-                    st.balloons()
-                except Exception as e:
-                    st.error(f"❌ 解析失败，错误信息：{str(e)}")
+            if not vision_key:
+                st.error("⚠️ 请在左侧填入硅基流动 API Key！")
+                st.stop()
+            if not user_input.strip() and not uploaded_image:
+                st.warning("⚠️ 请上传通知截图或输入文字内容！")
+                st.stop()
+                
+        # --- 核心引擎调用 ---
+        with right_col:
+            with st.spinner("🤖 引擎已启动，正在解构多节点与行程排布..."):
+                system_prompt = (
+                    "你是一个结构化实体抽取引擎和时间管理专家。从用户的通知中解构信息并倒推行程。"
+                    "必须输出标准 JSON 格式：\n"
+                    "{\n"
+                    '  "theme": "通知核心主题",\n'
+                    '  "time_nodes": [{"event": "事件", "deadline": "时间"}],\n'
+                    '  "location": "办理地点",\n'
+                    '  "requirements": ["要求1", "要求2"],\n'
+                    '  "suggested_itinerary": [{"time_point": "建议时间", "task": "待办描述"}]\n'
+                    "}\n"
+                )
 
-    # 2. 只要“记忆体”里有数据，我们就把它渲染出来（这样你去打勾，数据也不会丢了）
+                try:
+                    if engine_choice == "Qwen-VL (图文多模态旗舰版)":
+                        # 🚀 视觉大模型处理（通义千问 Qwen2.5-VL）
+                        client = OpenAI(
+                            api_key=vision_key,
+                            base_url="https://api.siliconflow.cn/v1" 
+                        )
+                        
+                        messages = [{"role": "system", "content": system_prompt}]
+                        user_content = []
+                        if user_input.strip():
+                            user_content.append({"type": "text", "text": "请严格按照 JSON 格式输出。补充说明：" + user_input})
+                        else:
+                            user_content.append({"type": "text", "text": "请解析这张通知截图，并严格按照 JSON 格式输出。"})
+                            
+                        if uploaded_image:
+                            base64_image = base64.b64encode(uploaded_image.getvalue()).decode('utf-8')
+                            user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}})
+                            
+                        messages.append({"role": "user", "content": user_content})
+                        
+                        response = client.chat.completions.create(
+                            # 硅基流动付费稳定模型名称
+                            model="Qwen/Qwen3-VL-30B-A3B-Instruct", 
+                            messages=messages,
+                            response_format={'type': 'json_object'}
+                        )
+                        
+                    else:
+                        # 🚀 纯文本极速处理（DeepSeek-Chat）
+                        client = OpenAI(
+                            api_key=deepseek_key,
+                            base_url="https://api.deepseek.com"  
+                        )
+                        
+                        response = client.chat.completions.create(
+                            model="deepseek-chat",  
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_input}
+                            ],
+                            response_format={'type': 'json_object'}
+                        )
+                    
+                    st.session_state.ai_result = json.loads(response.choices[0].message.content)
+                    st.toast('✅ 提取与规划完成！', icon='⚡')
+                    st.balloons()
+                    
+                except Exception as e:
+                    st.error(f"❌ 引擎请求中断，错误详情：{str(e)}")
     if "ai_result" in st.session_state:
         parsed_json = st.session_state.ai_result
         
-        tab1, tab2, tab3 = st.tabs(["📊 信息速览看板", "🗓️ 智能行程与待办", "💻 接口原始数据"])
+        tab1, tab2, tab3 = st.tabs(["📊 可视化速览", "🗓️ 行程与日历", "💻 接口级数据"])
         
         with tab1:
             st.info(f"📝 **通知核心主题**：\n\n### {parsed_json.get('theme', '未明确主题')}")
             time_nodes = parsed_json.get("time_nodes", [])
             if time_nodes:
-                st.markdown("#### 📅 关键时间节点列表")
+                st.markdown("#### 📅 关键时间节点")
                 for idx, item in enumerate(time_nodes, 1):
                     st.success(f"**{idx}. {item.get('event', '')}** ➔ `{item.get('deadline', '')}`")
             location_info = parsed_json.get("location")
             if location_info:
                 st.warning(f"📍 **办理地点**：\n\n{location_info}")
             reqs = parsed_json.get("requirements", [])
-            st.markdown("#### ⚠️ 申报门槛与硬性要求")
+            st.markdown("#### ⚠️️ 申报门槛与要求")
             if isinstance(reqs, list) and reqs:
                 for req in reqs:
                     st.error(f"• {req}")
-            elif isinstance(reqs, str):
-                st.error(f"• {reqs}")
                 
         with tab2:
             st.markdown("#### 📝 AI 倒推专属行动计划")
             itinerary = parsed_json.get("suggested_itinerary", [])
+            
             if itinerary:
-                # 现在你怎么打勾，系统都不会重置页面了！
                 for idx, step in enumerate(itinerary):
-                    st.checkbox(
-                        f"**【{step.get('time_point', '待定')}】** ➔ {step.get('task', '准备事项')}", 
-                        key=f"todo_{idx}"
-                    )
+                    st.checkbox(f"**【{step.get('time_point', '待定')}】** ➔ {step.get('task', '准备事项')}", key=f"todo_{idx}")
+                
+                st.markdown("---")
+                
+                # 【杀手锏 3】：生成并提供真正的 .ics 日历文件下载
+                ics_data = generate_ics_content(itinerary, parsed_json.get('theme', '校园通知'))
+                
+                st.download_button(
+                    label="📲 立即导入手机系统日历",
+                    data=ics_data,
+                    file_name="campus_schedule.ics",
+                    mime="text/calendar",
+                    type="primary"
+                )
+                st.caption("✨ 点击下载后发送至手机，可一键在 Apple/Android 原生系统内设定闹钟提醒。")
             else:
                 st.write("暂无行程建议")
                 
         with tab3:
             st.json(parsed_json)
-            
-    else:
-        # 只有在系统刚打开，记忆体完全为空时，才显示这句提示
-        st.info("👈 填入 API Key 并点击左侧按钮，体验自动提取+行程规划功能。")
