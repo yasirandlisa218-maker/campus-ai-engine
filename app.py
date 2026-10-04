@@ -2,6 +2,9 @@ import streamlit as st
 import json
 import base64
 import os
+import re
+import uuid
+from datetime import datetime
 from datetime import datetime, timedelta
 from openai import OpenAI
 
@@ -276,18 +279,77 @@ with right_col:
                 st.markdown("---")
                 
                 # 【杀手锏 3】：生成并提供真正的 .ics 日历文件下载
-                ics_data = generate_ics_content(itinerary, parsed_json.get('theme', '校园通知'))
+    
+
+            # 工业级日历生成逻辑
+            if "ai_result" in st.session_state and "suggested_itinerary" in st.session_state.ai_result:
                 
+                # 1. 准备标准日历头部 (严格要求 \r\n 换行)
+                ics_lines = [
+                    "BEGIN:VCALENDAR",
+                    "VERSION:2.0",
+                    "PRODID:-//JiMiTeam//Campus AI Engine//CN",
+                    "CALSCALE:GREGORIAN",
+                    "METHOD:PUBLISH"
+                ]
+                
+                # 获取当前年份，用于时间补全
+                current_year = datetime.now().year
+                
+                # 2. 遍历 AI 生成的行程，组装事件
+                for item in st.session_state.ai_result.get("suggested_itinerary", []):
+                    task_name = item.get("task", "未命名待办")
+                    time_str = item.get("time_point", "")
+                    
+                    # --- 核心：智能时间解析 ---
+                    # 提取字符串里的所有数字
+                    nums = re.findall(r'\d+', time_str)
+                    
+                    try:
+                        if len(nums) >= 4:  # 例如 "10月15日 14:00" -> 提取出 [10, 15, 14, 0]
+                            dt = datetime(current_year, int(nums[0]), int(nums[1]), int(nums[2]), int(nums[3]))
+                        elif len(nums) >= 2: # 例如 "10月15日" -> 提取出 [10, 15]，默认设为早上 9:00
+                            dt = datetime(current_year, int(nums[0]), int(nums[1]), 9, 0)
+                        else:
+                            dt = datetime.now() # 解析失败时，默认用当前时间兜底，防止崩溃
+                            
+                        formatted_time = dt.strftime("%Y%m%dT%H%M%S")
+                    except:
+                        formatted_time = datetime.now().strftime("%Y%m%dT%H%M%S")
+                        
+                    # 生成唯一 ID 和当前时间戳 (日历底层必需字段)
+                    event_uid = str(uuid.uuid4())
+                    dtstamp = datetime.now().strftime("%Y%m%dT%H%M%SZ")
+                    
+                    # 组装单个事件 (严格使用 Asia/Shanghai 时区)
+                    ics_lines.extend([
+                        "BEGIN:VEVENT",
+                        f"UID:{event_uid}",
+                        f"DTSTAMP:{dtstamp}",
+                        f"DTSTART;TZID=Asia/Shanghai:{formatted_time}",
+                        f"SUMMARY:{task_name}",
+                        f"DESCRIPTION:由【基米队】智能抽取引擎生成\\n原始时间节点: {time_str}",
+                        "END:VEVENT"
+                    ])
+                    
+                # 3. 闭合日历文件
+                ics_lines.append("END:VCALENDAR")
+                
+                # 按照国际标准用 \r\n 拼接
+                ics_content = "\r\n".join(ics_lines)
+                
+                # 4. 渲染下载按钮
                 st.download_button(
                     label="📲 立即导入手机系统日历",
-                    data=ics_data,
+                    data=ics_content.encode('utf-8'),
                     file_name="campus_schedule.ics",
                     mime="text/calendar",
-                    type="primary"
+                    type="primary",
+                    use_container_width=True
                 )
                 st.caption("✨ 点击下载后发送至手机，可一键在 Apple/Android 原生系统内设定闹钟提醒。")
             else:
                 st.write("暂无行程建议")
-                
+                    
         with tab3:
             st.json(parsed_json)
